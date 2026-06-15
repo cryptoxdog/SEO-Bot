@@ -25,9 +25,10 @@ import express from 'express';
 import helmet from 'helmet';
 import cors from 'cors';
 import { loadConfig } from './core/config.js';
-import { getLogger, createModuleLogger } from './core/logger.js';
+import { createModuleLogger } from './core/logger.js';
 import { getDb, closeDb } from './core/database/index.js';
-import { Scheduler } from './core/scheduler.js';
+import { getScheduler } from './core/scheduler.js';
+import { getLlmService } from './services/llm.js';
 
 // Module imports
 import { registerSerpHandlers } from './modules/serp-intelligence/index.js';
@@ -48,7 +49,7 @@ async function main() {
   logger.info('Database connected');
 
   // ─── Initialize Scheduler ────────────────────────────────────────────────
-  const scheduler = new Scheduler();
+  const scheduler = getScheduler();
 
   // Register all module handlers
   registerSerpHandlers(scheduler);
@@ -96,7 +97,6 @@ async function main() {
 
   // LLM spend endpoint
   app.get('/api/llm-spend', async (req, res) => {
-    const { getLlmService } = await import('./services/llm.js');
     const llm = getLlmService();
     res.json({
       dailySpend: llm.getDailySpend(),

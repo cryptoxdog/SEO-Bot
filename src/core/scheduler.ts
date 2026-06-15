@@ -161,6 +161,23 @@ export class Scheduler {
     logger.debug({ jobName }, 'Handler registered');
   }
 
+  async addJob(jobName: string, data: Record<string, unknown>): Promise<void> {
+    const jobDef = JOB_DEFINITIONS.find(j => j.name === jobName);
+    if (!jobDef) {
+      throw new Error(`Unknown job: ${jobName}`);
+    }
+    const queueName = `l9:${jobDef.module}`;
+    const queue = this.queues.get(queueName);
+    if (!queue) {
+      throw new Error(`Queue not initialized for module: ${jobDef.module}`);
+    }
+    await queue.add(jobName, { definition: jobDef, ...data }, {
+      removeOnComplete: { count: 100 },
+      removeOnFail: { count: 50 },
+    });
+    logger.info({ jobName, data }, 'Manual job queued');
+  }
+
   async start(): Promise<void> {
     logger.info('Starting scheduler...');
 
