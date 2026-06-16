@@ -6,14 +6,18 @@
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════════
- * L9 SEO Bot - API Server
- * 
+ * L9 SEO Bot - API Server (Fastify — sole HTTP server)
+ *
  * Lightweight HTTP API for:
- * - Health checks (Docker/monitoring)
+ * - Health checks (Docker/monitoring) — includes DB + scheduler liveness
  * - Operator dashboard data
  * - Client status overview
  * - Manual trigger endpoints
  * - Webhook receivers
+ * - LLM spend reporting
+ *
+ * T2.2 FIX: Express server removed from src/index.ts.
+ * All HTTP traffic now routes through this single Fastify instance.
  * ═══════════════════════════════════════════════════════════════════════════════
  */
 
@@ -23,6 +27,7 @@ import { eq, desc, and, gte, sql } from 'drizzle-orm';
 import { getDb, schema } from '../core/database/index.js';
 import { createModuleLogger } from '../core/logger.js';
 import { getScheduler } from '../core/scheduler.js';
+import { getLlmService } from '../services/llm.js';
 import { registerDashboard } from './dashboard.js';
 
 const logger = createModuleLogger('api');
@@ -36,12 +41,11 @@ export async function startApiServer(port: number = 3100): Promise<void> {
   await registerDashboard(app);
 
   // ─── Health Check ────────────────────────────────────────────────────────
-
+  // Checks DB liveness + scheduler state. Used by Docker HEALTHCHECK.
   app.get('/health', async () => {
     const db = getDb();
     const scheduler = getScheduler();
 
-    // Check DB connectivity
     let dbOk = false;
     try {
       await db.execute(sql`SELECT 1`);
@@ -60,21 +64,44 @@ export async function startApiServer(port: number = 3100): Promise<void> {
     };
   });
 
-  // ─── Dashboard: All Clients Overview ─────────────────────────────────────
-
-  app.get('/api/clients', async () => {
+  // ─── Status Overview (ported from Express src/index.ts) ─────────────────
+  // Returns active client list + uptime. Previously on Express /api/status.
+  app.get('/api/status', async () => {
     const db = getDb();
-
     const clients = await db.select()
       .from(schema.clients)
       .where(eq(schema.clients.active, true))
       .orderBy(schema.clients.name);
 
+    return {
+      status: 'running',
+      activeClients: clients.length,
+      clients: clients.map(c => ({ id: c.id, domain: c.domain, industry: c.industry })),
+      uptime: process.uptime(),
+    };
+  });
+
+  // ─── LLM Spend (ported from Express src/index.ts) ───────────────────────
+  // Returns today's USD spend from LLM call log.
+  app.get('/api/llm-spend', async () => {
+    const llm = getLlmService();
+    return {
+      dailySpend: llm.getDailySpend(),
+      timestamp: new Date().toISOString(),
+    };
+  });
+
+  // ─── Dashboard: All Clients Overview ─────────────────────────────────────
+  app.get('/api/clients', async () => {
+    const db = getDb();
+    const clients = await db.select()
+      .from(schema.clients)
+      .where(eq(schema.clients.active, true))
+      .orderBy(schema.clients.name);
     return { clients };
   });
 
   // ─── Dashboard: Client Detail ────────────────────────────────────────────
-
   app.get<{ Params: { clientId: string } }>('/api/clients/:clientId', async (request) => {
     const db = getDb();
     const { clientId } = request.params;
@@ -86,21 +113,18 @@ export async function startApiServer(port: number = 3100): Promise<void> {
 
     if (!client) return { error: 'Client not found' };
 
-    // Get latest rankings
     const rankings = await db.select()
       .from(schema.serpRankings)
       .where(eq(schema.serpRankings.clientId, clientId))
       .orderBy(desc(schema.serpRankings.checkedAt))
       .limit(20);
 
-    // Get latest vitals
     const vitals = await db.select()
       .from(schema.webVitals)
       .where(eq(schema.webVitals.clientId, clientId))
       .orderBy(desc(schema.webVitals.measuredAt))
       .limit(10);
 
-    // Get engagement summary
     const oneWeekAgo = new Date(Date.now() - 7 * 86400000);
     const engagement = await db.select()
       .from(schema.pageEngagement)
@@ -111,39 +135,27 @@ export async function startApiServer(port: number = 3100): Promise<void> {
       .orderBy(desc(schema.pageEngagement.totalPageviews))
       .limit(10);
 
-    // Get link building status
     const prospects = await db.select()
       .from(schema.linkProspects)
       .where(eq(schema.linkProspects.clientId, clientId))
       .orderBy(desc(schema.linkProspects.createdAt))
       .limit(10);
 
-    // Get recent citations
     const citations = await db.select()
       .from(schema.aeoCitations)
       .where(eq(schema.aeoCitations.clientId, clientId))
       .orderBy(desc(schema.aeoCitations.checkedAt))
       .limit(10);
 
-    return {
-      client,
-      rankings,
-      vitals,
-      engagement,
-      prospects,
-      citations,
-    };
+    return { client, rankings, vitals, engagement, prospects, citations };
   });
 
   // ─── Dashboard: Weekly Report ────────────────────────────────────────────
-
   app.get<{ Params: { clientId: string } }>('/api/clients/:clientId/report', async (request) => {
     const db = getDb();
     const { clientId } = request.params;
-
     const oneWeekAgo = new Date(Date.now() - 7 * 86400000);
 
-    // Rankings movement
     const rankings = await db.select()
       .from(schema.serpRankings)
       .where(and(
@@ -155,7 +167,6 @@ export async function startApiServer(port: number = 3100): Promise<void> {
     const improved = rankings.filter(r => r.previousPosition && r.position && r.position < r.previousPosition);
     const declined = rankings.filter(r => r.previousPosition && r.position && r.position > r.previousPosition);
 
-    // Vitals trend
     const vitals = await db.select()
       .from(schema.webVitals)
       .where(and(
@@ -164,7 +175,6 @@ export async function startApiServer(port: number = 3100): Promise<void> {
       ))
       .orderBy(desc(schema.webVitals.measuredAt));
 
-    // Link building progress
     const newProspects = await db.select()
       .from(schema.linkProspects)
       .where(and(
@@ -172,7 +182,6 @@ export async function startApiServer(port: number = 3100): Promise<void> {
         gte(schema.linkProspects.createdAt, oneWeekAgo),
       ));
 
-    // Citation rate
     const citations = await db.select()
       .from(schema.aeoCitations)
       .where(and(
@@ -214,7 +223,6 @@ export async function startApiServer(port: number = 3100): Promise<void> {
   });
 
   // ─── Manual Triggers ─────────────────────────────────────────────────────
-
   app.post<{ Params: { clientId: string }; Body: { module: string } }>(
     '/api/clients/:clientId/trigger',
     async (request) => {
@@ -239,7 +247,6 @@ export async function startApiServer(port: number = 3100): Promise<void> {
         return { error: `Invalid module. Valid: ${validModules.join(', ')}` };
       }
 
-      // Get client
       const db = getDb();
       const [client] = await db.select()
         .from(schema.clients)
@@ -248,7 +255,6 @@ export async function startApiServer(port: number = 3100): Promise<void> {
 
       if (!client) return { error: 'Client not found' };
 
-      // Queue the job
       await scheduler.addJob(module, {
         clientId: client.id,
         clientDomain: client.domain,
@@ -260,14 +266,11 @@ export async function startApiServer(port: number = 3100): Promise<void> {
   );
 
   // ─── Token Budget Status ─────────────────────────────────────────────────
-
   app.get('/api/token-budget', async () => {
     const db = getDb();
-
     const today = new Date().toISOString().split('T')[0];
     const thisMonth = today.slice(0, 7);
 
-    // Get today's usage from action_outcomes
     const outcomes = await db.select()
       .from(schema.actionOutcomes)
       .where(gte(schema.actionOutcomes.executedAt, new Date(today)))
@@ -282,10 +285,9 @@ export async function startApiServer(port: number = 3100): Promise<void> {
   });
 
   // ─── Start Server ────────────────────────────────────────────────────────
-
   try {
     await app.listen({ port, host: '0.0.0.0' });
-    logger.info({ port }, 'API server started');
+    logger.info({ port }, 'API server started (Fastify — sole HTTP server)');
   } catch (error: any) {
     logger.error({ error: error.message }, 'API server failed to start');
     throw error;
