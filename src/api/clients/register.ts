@@ -9,6 +9,22 @@ import fastifyPlugin from 'fastify-plugin';
 import { getDb, schema } from '../../core/database/index.js';
 import { WebsiteFactoryContractV2 } from '../../../contracts/schema/website_factory_v2.js';
 
+function isUniqueConstraintError(error: unknown): error is { code: string } {
+  return typeof error === 'object' && error !== null && 'code' in error && (error as { code?: unknown }).code === '23505';
+}
+
+function buildClientConfig(payload: WebsiteFactoryContractV2) {
+  return {
+    targetKeywords: payload.targetKeywords.map((keywordEntry) => ({
+      keyword: keywordEntry.keyword,
+      priority: keywordEntry.priority,
+    })),
+    competitorUrls: payload.competitorUrls,
+    vercelUrl: payload.vercelUrl,
+    seo_contract: payload.seo_contract,
+  };
+}
+
 const registerClientRoutes: FastifyPluginAsync = async (app) => {
   app.post('/api/clients/register', async (request, reply) => {
     const parsed = WebsiteFactoryContractV2.safeParse(request.body);
@@ -33,27 +49,11 @@ const registerClientRoutes: FastifyPluginAsync = async (app) => {
         state: payload.state ?? null,
         posthogProjectId: payload.posthog_project_id ?? null,
         posthogApiKey: payload.posthog_api_key ?? null,
-        config: {
-          targetKeywords: payload.targetKeywords.map((keywordEntry) => ({
-            keyword: keywordEntry.keyword,
-            priority: keywordEntry.priority,
-          })),
-          competitorUrls: payload.competitorUrls,
-          vercelUrl: payload.vercelUrl,
-          seo_contract: payload.seo_contract,
-        },
+        config: buildClientConfig(payload),
       }).onConflictDoUpdate({
         target: schema.clients.domain,
         set: {
-          config: {
-            targetKeywords: payload.targetKeywords.map((keywordEntry) => ({
-              keyword: keywordEntry.keyword,
-              priority: keywordEntry.priority,
-            })),
-            competitorUrls: payload.competitorUrls,
-            vercelUrl: payload.vercelUrl,
-            seo_contract: payload.seo_contract,
-          },
+          config: buildClientConfig(payload),
           updatedAt: new Date(),
           active: true,
         },
@@ -63,8 +63,8 @@ const registerClientRoutes: FastifyPluginAsync = async (app) => {
         registered: true,
         clientId: client.id,
       });
-    } catch (error: any) {
-      if (error?.code === '23505') {
+    } catch (error: unknown) {
+      if (isUniqueConstraintError(error)) {
         return reply.status(409).send({
           registered: false,
           error: `Client registration conflict for domain "${normalizedDomain}"`,

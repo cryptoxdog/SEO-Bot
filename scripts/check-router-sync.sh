@@ -3,11 +3,13 @@
 # layer: script
 # role: seo_bot_engine
 # status: active
+# Make executable: chmod +x scripts/check-router-sync.sh
 
 set -euo pipefail
 
 OWNER="cryptoxdog"
 SEO_BOT_REPO="SEO-Bot"
+# Resolved dynamically by checking known repository name variants.
 WEBSITE_BOT_REPO=""
 ROUTER_PATH="packages/llm-router/src/index.ts"
 SEO_SHA=""
@@ -17,6 +19,12 @@ AUTH_SCHEME="Bearer"
 
 if [[ -z "${GITHUB_TOKEN:-}" ]]; then
   echo "GITHUB_TOKEN is required to compare router file SHAs."
+  exit 1
+fi
+
+PYTHON_BIN="$(command -v python3 || command -v python || true)"
+if [[ -z "${PYTHON_BIN}" ]]; then
+  echo "Python is required to parse GitHub API JSON responses."
   exit 1
 fi
 
@@ -37,7 +45,7 @@ resolve_website_repo() {
 
   for candidate in "${candidates[@]}"; do
     response="$(github_api_get "/repos/${OWNER}/${candidate}")"
-    message="$(printf '%s' "${response}" | python -c 'import json,sys; print(json.load(sys.stdin).get("message",""))')"
+    message="$(printf '%s' "${response}" | "${PYTHON_BIN}" -c 'import json,sys; print(json.load(sys.stdin).get("message",""))')"
     if [[ "${message}" != "Not Found" ]]; then
       WEBSITE_BOT_REPO="${candidate}"
       return
@@ -54,14 +62,14 @@ fetch_router_sha() {
   local message
 
   response="$(github_api_get "/repos/${OWNER}/${repo}/contents/${ROUTER_PATH}")"
-  message="$(printf '%s' "${response}" | python -c 'import json,sys; print(json.load(sys.stdin).get("message",""))')"
+  message="$(printf '%s' "${response}" | "${PYTHON_BIN}" -c 'import json,sys; print(json.load(sys.stdin).get("message",""))')"
 
   if [[ "${message}" == "Not Found" ]]; then
     echo "Router file not found in ${OWNER}/${repo} at ${ROUTER_PATH}."
     exit 1
   fi
 
-  printf '%s' "${response}" | python -c 'import json,sys; print(json.load(sys.stdin)["sha"])'
+  printf '%s' "${response}" | "${PYTHON_BIN}" -c 'import json,sys; print(json.load(sys.stdin)["sha"])'
 }
 
 resolve_website_repo
@@ -85,5 +93,4 @@ fi
 echo "Router drift detected."
 echo "  ${OWNER}/${SEO_BOT_REPO}: ${SEO_SHA}"
 echo "  ${OWNER}/${WEBSITE_BOT_REPO}: ${WEBSITE_SHA}"
-echo "Run: chmod +x scripts/check-router-sync.sh"
 exit 1

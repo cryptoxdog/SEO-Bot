@@ -51,7 +51,11 @@ class GitHubContentClient {
   async injectSchema(path: string, schemaJson: Record<string, unknown>, branch: string): Promise<void> {
     const file = await this.getFile(path, branch);
     const schemaScript = `<script type="application/ld+json">${JSON.stringify(schemaJson)}</script>`;
-    const nextContent = file.content.replace(/<\/head>/i, `  ${schemaScript}\n</head>`);
+    const withoutExistingSchema = file.content.replace(
+      /\s*<script[^>]*type=["']application\/ld\+json["'][^>]*>[\s\S]*?<\/script>\s*/gi,
+      '\n',
+    );
+    const nextContent = withoutExistingSchema.replace(/<\/head>/i, `  ${schemaScript}\n</head>`);
 
     if (nextContent !== file.content) {
       await this.updateFile(path, nextContent, file.sha, branch, `Inject JSON-LD schema for ${path}`);
@@ -81,6 +85,7 @@ class GitHubContentClient {
     const data = await response.json() as { sha: string; content: string };
     return {
       sha: data.sha,
+      // GitHub returns base64 with line breaks for long payloads.
       content: Buffer.from(data.content.replace(/\n/g, ''), 'base64').toString('utf8'),
     };
   }
