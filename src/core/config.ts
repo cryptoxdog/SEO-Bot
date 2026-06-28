@@ -39,6 +39,12 @@ const envSchema = z.object({
   OPENROUTER_API_KEY: z.string().min(1),
   PERPLEXITY_API_KEY: z.string().min(1),
 
+  // Cross-repo handoff: shared secret presented by Website-Bot as a Bearer
+  // token to POST /api/clients/register. When unset, that route is open
+  // (backward compatible); set it to require auth. Must match Website-Bot's
+  // SEO_BOT_API_KEY secret.
+  SEO_BOT_API_KEY: z.string().optional(),
+
   // Email Outreach
   SMTP_HOST: z.string().default('smtp.sendgrid.net'),
   SMTP_PORT: z.coerce.number().default(587),

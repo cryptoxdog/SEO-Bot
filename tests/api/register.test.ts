@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import Fastify, { FastifyInstance } from 'fastify';
 
 // Chainable Drizzle mock: insert().values().onConflictDoUpdate().returning()
@@ -82,5 +82,49 @@ describe('POST /api/clients/register', () => {
     const res = await app.inject({ method: 'POST', url: '/api/clients/register', payload: basePayload });
     expect(res.statusCode).toBe(409);
     expect(res.json().registered).toBe(false);
+  });
+});
+
+describe('POST /api/clients/register — API key gate', () => {
+  const KEY = 'super-secret-key';
+
+  afterEach(() => {
+    delete process.env.SEO_BOT_API_KEY;
+  });
+
+  it('rejects with 401 when a key is configured but no Authorization header is sent', async () => {
+    process.env.SEO_BOT_API_KEY = KEY;
+    const res = await app.inject({ method: 'POST', url: '/api/clients/register', payload: basePayload });
+    expect(res.statusCode).toBe(401);
+    expect(res.json()).toEqual({ registered: false, error: 'unauthorized' });
+    expect(insertMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects with 401 on a wrong bearer token', async () => {
+    process.env.SEO_BOT_API_KEY = KEY;
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/clients/register',
+      payload: basePayload,
+      headers: { authorization: 'Bearer wrong-key' },
+    });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('accepts a correct bearer token', async () => {
+    process.env.SEO_BOT_API_KEY = KEY;
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/clients/register',
+      payload: basePayload,
+      headers: { authorization: `Bearer ${KEY}` },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json()).toEqual({ registered: true, clientId: 'client-uuid-1' });
+  });
+
+  it('allows the request when no key is configured (backward compatible)', async () => {
+    const res = await app.inject({ method: 'POST', url: '/api/clients/register', payload: basePayload });
+    expect(res.statusCode).toBe(201);
   });
 });

@@ -19,11 +19,29 @@
  */
 
 import { FastifyInstance } from 'fastify';
+import { timingSafeEqual } from 'node:crypto';
 import { getDb, schema } from '../../core/database/index.js';
 import { createModuleLogger } from '../../core/logger.js';
 import { WebsiteFactoryContractV2 } from '../../contracts/website_factory_v2.js';
 
 const logger = createModuleLogger('api:register');
+
+/** Constant-time string compare (avoids leaking the key via timing). */
+function safeEqual(a: string, b: string): boolean {
+  const ab = Buffer.from(a);
+  const bb = Buffer.from(b);
+  return ab.length === bb.length && timingSafeEqual(ab, bb);
+}
+
+/**
+ * Extract a `Bearer <token>` value from the Authorization header.
+ * Website-Bot's HandoffEmitterStage sends `Authorization: Bearer $SEO_BOT_API_KEY`.
+ */
+function bearerToken(header: string | undefined): string {
+  return typeof header === 'string' && header.startsWith('Bearer ')
+    ? header.slice('Bearer '.length).trim()
+    : '';
+}
 
 /** Strip protocol / www / trailing slash and lowercase, matching add-client.ts. */
 function normalizeDomain(domain: string): string {
@@ -50,6 +68,18 @@ function buildClientConfig(payload: WebsiteFactoryContractV2) {
 
 export async function registerClientRoutes(app: FastifyInstance): Promise<void> {
   app.post('/api/clients/register', async (request, reply) => {
+    // API-key gate: enforced only when SEO_BOT_API_KEY is configured, so
+    // existing deployments without the secret keep working. The caller
+    // (Website-Bot) presents it as `Authorization: Bearer <key>`.
+    const expectedKey = process.env.SEO_BOT_API_KEY;
+    if (expectedKey) {
+      const token = bearerToken(request.headers.authorization);
+      if (!token || !safeEqual(token, expectedKey)) {
+        logger.warn({ ip: request.ip }, 'Rejected register request: bad or missing API key');
+        return reply.status(401).send({ registered: false, error: 'unauthorized' });
+      }
+    }
+
     const parsed = WebsiteFactoryContractV2.safeParse(request.body);
     if (!parsed.success) {
       return reply.status(400).send({ registered: false, error: parsed.error.flatten() });
