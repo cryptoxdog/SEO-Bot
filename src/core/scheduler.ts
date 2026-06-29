@@ -170,7 +170,7 @@ export class Scheduler {
     if (!jobDef) {
       throw new Error(`Unknown job: ${jobName}`);
     }
-    const queueName = `l9:${jobDef.module}`;
+    const queueName = `l9-${jobDef.module}`;
     // FIX(T-A): Initialize queue on-demand — handles disabled jobs skipped during startup.
     // Without this, addJob() throws if the job was disabled and its queue was never created.
     let queue = this.queues.get(queueName);
@@ -192,7 +192,7 @@ export class Scheduler {
     for (const jobDef of JOB_DEFINITIONS) {
       if (!jobDef.enabled) continue;
 
-      const queueName = `l9:${jobDef.module}`;
+      const queueName = `l9-${jobDef.module}`;
 
       if (!this.queues.has(queueName)) {
         const queue = new Queue(queueName, { connection: this.connection as ConnectionOptions });
@@ -262,7 +262,7 @@ export class Scheduler {
           .where(eq(schema.clients.active, true));
 
         for (const client of activeClients) {
-          const queue = this.queues.get(`l9:${definition.module}`)!;
+          const queue = this.queues.get(`l9-${definition.module}`)!;
           await queue.add(definition.name, {
             definition,
             clientId: client.id,
