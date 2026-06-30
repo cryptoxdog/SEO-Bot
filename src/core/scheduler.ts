@@ -17,8 +17,9 @@
  * ═══════════════════════════════════════════════════════════════════════════════
  */
 
-import { Queue, Worker, QueueScheduler, Job } from 'bullmq';
-import IORedis from 'ioredis';
+import { Queue, Worker, Job, type ConnectionOptions } from 'bullmq';
+import { Redis } from 'ioredis';
+import { eq } from 'drizzle-orm';
 import { getConfig } from './config.js';
 import { createModuleLogger } from './logger.js';
 import { getDb, schema } from './database/index.js';
@@ -147,14 +148,14 @@ const JOB_DEFINITIONS: JobDefinition[] = [
 // ─── Scheduler Class ─────────────────────────────────────────────────────────
 
 export class Scheduler {
-  private connection: IORedis;
+  private connection: Redis;
   private queues: Map<string, Queue> = new Map();
   private workers: Map<string, Worker> = new Map();
   private handlers: Map<string, (job: Job) => Promise<void>> = new Map();
 
   constructor() {
     const config = getConfig();
-    this.connection = new IORedis(config.REDIS_URL, {
+    this.connection = new Redis(config.REDIS_URL, {
       maxRetriesPerRequest: null,
     });
   }
@@ -169,12 +170,12 @@ export class Scheduler {
     if (!jobDef) {
       throw new Error(`Unknown job: ${jobName}`);
     }
-    const queueName = `l9:${jobDef.module}`;
+    const queueName = `l9-${jobDef.module}`;
     // FIX(T-A): Initialize queue on-demand — handles disabled jobs skipped during startup.
     // Without this, addJob() throws if the job was disabled and its queue was never created.
     let queue = this.queues.get(queueName);
     if (!queue) {
-      queue = new Queue(queueName, { connection: this.connection });
+      queue = new Queue(queueName, { connection: this.connection as ConnectionOptions });
       this.queues.set(queueName, queue);
     }
     await queue.add(jobName, { definition: jobDef, ...data }, {
@@ -191,10 +192,10 @@ export class Scheduler {
     for (const jobDef of JOB_DEFINITIONS) {
       if (!jobDef.enabled) continue;
 
-      const queueName = `l9:${jobDef.module}`;
+      const queueName = `l9-${jobDef.module}`;
 
       if (!this.queues.has(queueName)) {
-        const queue = new Queue(queueName, { connection: this.connection });
+        const queue = new Queue(queueName, { connection: this.connection as ConnectionOptions });
         this.queues.set(queueName, queue);
       }
 
@@ -216,7 +217,7 @@ export class Scheduler {
           await this.processJob(job);
         },
         {
-          connection: this.connection,
+          connection: this.connection as ConnectionOptions,
           concurrency: 2,
           limiter: { max: 5, duration: 60000 },
         }
@@ -257,12 +258,11 @@ export class Scheduler {
 
     try {
       if (definition.clientScoped && !job.data.clientId) {
-        const activeClients = await db.query.clients.findMany({
-          where: (clients, { eq }) => eq(clients.active, true),
-        });
+        const activeClients = await db.select().from(schema.clients)
+          .where(eq(schema.clients.active, true));
 
         for (const client of activeClients) {
-          const queue = this.queues.get(`l9:${definition.module}`)!;
+          const queue = this.queues.get(`l9-${definition.module}`)!;
           await queue.add(definition.name, {
             definition,
             clientId: client.id,
@@ -282,13 +282,13 @@ export class Scheduler {
       const durationMs = Date.now() - startTime;
       await db.update(schema.jobExecutions)
         .set({ status: 'completed', completedAt: new Date(), durationMs })
-        .where(({ eq }) => eq(schema.jobExecutions.id, execution.id));
+        .where(eq(schema.jobExecutions.id, execution.id));
 
     } catch (error: any) {
       const durationMs = Date.now() - startTime;
       await db.update(schema.jobExecutions)
         .set({ status: 'failed', completedAt: new Date(), durationMs, error: error.message })
-        .where(({ eq }) => eq(schema.jobExecutions.id, execution.id));
+        .where(eq(schema.jobExecutions.id, execution.id));
 
       throw error;
     }
