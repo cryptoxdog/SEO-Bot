@@ -1,3 +1,5 @@
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+--> statement-breakpoint
 CREATE TABLE IF NOT EXISTS "action_outcomes" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"client_id" uuid NOT NULL,
